@@ -3,33 +3,95 @@
 import pandas as pd
 import os
 
+def load_datasets():
+    # 1. Dynamically locate the absolute path of this exact Python file (the 'src' folder)
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 2. Navigate up one level to the project root, then down into 'data/raw'
+    data_dir = os.path.join(src_dir, '..', 'data', 'raw')
+    
+    # 3. Load the EXACT physical filenames currently sitting in your VS Code folder
+    weather_df = pd.read_csv(os.path.join(data_dir, 'weather_data.csv'), na_values=['NA', ''])
+    soil_df = pd.read_csv(os.path.join(data_dir, 'soil_sensor_data.csv'), na_values=['NA', ''])
+    crop_parameters_df = pd.read_csv(os.path.join(data_dir, 'crop_zone_parameters_data.csv'), na_values=['NA', ''])
+    
+    return weather_df, soil_df, crop_parameters_df
 
-weather_df = pd.read_csv('data/raw/weather_data.csv', na_values=['NA',   ''])
-soil_df = pd.read_csv('data/raw/soil_sensor_data.csv', na_values=['NA',   ''])
-crop_parameters_df = pd.read_csv('data/raw/crop_zone_parameters_data.csv', na_values=['NA',   ''])
+# Execute Loading
+weather_df, soil_df, crop_parameters_df = load_datasets()
 
 # Phase 1: Identify Quality Issues
 def phase_1_diagnostics(df: pd.DataFrame, dataset_name: str) -> None:
     """
     Executes Phase 1: Identify Quality Issues.
-    Outputs diagnostic metadata to the standard output for initial exploratory analysis.
+    Explicitly targets missing values, outliers, units, and sensor anomalies.
     """
     print(f"--- DIAGNOSTICS: {dataset_name.upper()} DATASET ---")
     
-    print("\n1. Structural Info:")
-    df.info()
+    # 1. Missing Values (Filtered for clarity)
+    print("\n1. MISSING VALUES:")
+    missing = df.isnull().sum()
+    missing_cols = missing[missing > 0]
+    if not missing_cols.empty:
+        print(missing_cols)
+    else:
+        print("No missing values detected.")
+        
+    # 2. Structural Duplicates
+    print("\n2. DUPLICATES:")
+    print(f"Total identical rows: {df.duplicated().sum()}")
     
-    print("\n2. Missing Values Count:")
-    print(df.isnull().sum())
+    # 3. Domain-Specific Anomalies, Outliers & Inconsistent Units
+    print("\n3. SENSOR ANOMALIES & OUTLIERS:")
+    anomaly_found = False
     
-    print("\n3. Duplicate Rows Count:")
-    print(f"Total duplicates: {df.duplicated().sum()}")
-    
-    print("\n4. Statistical Summary:")
-    print(df.describe(include='all'))
+    if dataset_name == 'weather':
+        if 'temperature_c' in df.columns:
+            high_temp = df[df['temperature_c'] > 40.0]
+            if not high_temp.empty:
+                print(f"[!] OUTLIER: {len(high_temp)} temperature readings exceed 40.0°C.")
+                anomaly_found = True
+                
+        if 'rainfall_mm' in df.columns:
+            extreme_rain = df[df['rainfall_mm'] > 50.0]
+            if not extreme_rain.empty:
+                print(f"[!] EXTREME: {len(extreme_rain)} rainfall events exceed 50.0mm (Verify if storm or sensor error).")
+                anomaly_found = True
+                
+    elif dataset_name == 'soil':
+        if 'tank_level_liters' in df.columns:
+            overflow = df[df['tank_level_liters'] > 5000]
+            if not overflow.empty:
+                print(f"[!] IMPOSSIBLE PHYSICAL UNIT: {len(overflow)} tank readings exceed absolute 5000L capacity.")
+                anomaly_found = True
+                
+        if 'sensor_status' in df.columns:
+            faults = df[df['sensor_status'] == 'CHECK']
+            if not faults.empty:
+                print(f"[!] HARDWARE FAULT: {len(faults)} sensors explicitly report 'CHECK' status.")
+                anomaly_found = True
+                
+        if 'pump_flow_lpm' in df.columns and 'pump_power_watts' in df.columns:
+            logical_error = df[(df['pump_flow_lpm'] == 0.0) & (df['pump_power_watts'] > 0)]
+            if not logical_error.empty:
+                print(f"[!] INCONSISTENT LOGIC: {len(logical_error)} records show pump drawing power but 0.0 LPM flow.")
+                anomaly_found = True
+                
+        if 'soil_moisture_pct' in df.columns:
+            critical_drop = df[df['soil_moisture_pct'] < 10.0]
+            if not critical_drop.empty:
+                print(f"[!] OUTLIER: {len(critical_drop)} moisture readings drop below 10% (Severe wilt or disconnected probe).")
+                anomaly_found = True
+                
+    if not anomaly_found:
+        print("No immediate physical anomalies detected.")
+        
+    # 4. Standard Statistical Baseline
+    print("\n4. STATISTICAL SUMMARY (Min/Max verification):")
+    print(df.describe().T[['min', 'max', 'mean', 'std']])
     print("-" * 50 + "\n")
 
-# Phase 2: Data Preparation
+# Phase 2: Data Cleaning
 
 def clean_hydrosense_data(df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
     """
@@ -85,18 +147,12 @@ def clean_hydrosense_data(df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
 
     return df.reset_index(drop=True)
 
-"""phase_1_diagnostics(weather_df, 'weather')
-phase_1_diagnostics(soil_df, 'soil')
-phase_1_diagnostics(crop_parameters_df, 'crop_parameters')"""
-
 cleaned_weather_df = clean_hydrosense_data(weather_df, 'weather')
 cleaned_soil_df = clean_hydrosense_data(soil_df, 'soil')
-cleaned_crop_parameters_df = clean_hydrosense_data(crop_parameters_df, 'crop_parameters')
-
-print("Data cleaning completed. Cleaned datasets are ready for analysis.")
+cleaned_crop_df = clean_hydrosense_data(crop_parameters_df, 'crop_parameters')
+    
 
 # Dataset Merging
-
 def combine_hydrosense_datasets(df_weather: pd.DataFrame, df_soil: pd.DataFrame, df_crop: pd.DataFrame) -> pd.DataFrame:
     """
     Merges weather, soil, and crop datasets into a single denormalized array.
@@ -105,12 +161,11 @@ def combine_hydrosense_datasets(df_weather: pd.DataFrame, df_soil: pd.DataFrame,
     
     # Step 1: Normalize temporal keys for merging
     # Ensure weather date is datetime format
-    df_weather['date'] = pd.to_datetime(cleaned_weather_df['ts']).dt.tz_localize(None).dt.normalize()
+    df_weather['date'] = pd.to_datetime(weather_df['date']).dt.tz_localize(None).dt.normalize()
     
     # Extract date from soil timestamp (e.g., converting '2026-03-01 12:00' to '2026-03-01')
-    df_soil['date'] = pd.to_datetime(cleaned_soil_df['timestamp']).dt.tz_localize(None).dt.normalize()
+    df_soil['date'] = pd.to_datetime(soil_df['timestamp']).dt.tz_localize(None).dt.normalize()
 
-    
     # Step 2: Temporal Join (Soil + Weather)
     # Merges daily weather data across all three zone readings for that specific day
     merged_temporal = pd.merge(df_soil, df_weather, on='date', how='left')
@@ -121,16 +176,26 @@ def combine_hydrosense_datasets(df_weather: pd.DataFrame, df_soil: pd.DataFrame,
     
     return final_dataset
 
-# Execute combination of cleaned datasets into a single denormalized DataFrame ready for analysis and modeling
-combined_df = combine_hydrosense_datasets(cleaned_weather_df, cleaned_soil_df, cleaned_crop_parameters_df)
 
-# Define output path
-output_directory = 'data/processed'
-output_file = 'cleaned_irrigation_dataset.csv'
-output_path = os.path.join(output_directory, output_file)
+if __name__ == '__main__':
 
-# Create directory if it does not exist (fulfills project folder structure requirement)
-os.makedirs(output_directory, exist_ok=True)
-
-# Export to CSV
-combined_df.to_csv(output_path, index=False)
+    # Diagnostic check before merge
+    print("\n--- PRE-MERGE DIAGNOSTICS ---")
+    print(f"Weather dataset shape: {cleaned_weather_df.shape}")
+    print(f"Soil Date Range: {cleaned_soil_df['timestamp'].min()} to {cleaned_soil_df['timestamp'].max()}")
+    print(f"Weather Date Range: {cleaned_weather_df['date'].min()} to {cleaned_weather_df['date'].max()}")
+    print("-----------------------------\n")
+    
+    # C. Execute Merge
+    combined_df = combine_hydrosense_datasets(cleaned_weather_df, cleaned_soil_df, cleaned_crop_df)
+    
+    # D. Execute Export
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    output_directory = os.path.join(src_dir, '..', 'data', 'processed')
+    output_file = 'cleaned_irrigation_dataset.csv'
+    output_path = os.path.join(output_directory, output_file)
+    
+    os.makedirs(output_directory, exist_ok=True)
+    combined_df.to_csv(output_path, index=False)
+    
+    print(f"Export successful. Absolute path resolved to: {output_path}")
