@@ -4,7 +4,7 @@ Irrigation schedule optimization — minimize water use while respecting moistur
 """
 
 import numpy as np
-from src.simulation import soil_moisture_derivative
+from simulation import soil_moisture_derivative
 
 
 def greedy_irrigation_schedule(S0, rainfall, et_series, dc, fc, min_moisture, target_moisture, dt=1.0):

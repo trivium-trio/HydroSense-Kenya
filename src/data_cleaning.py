@@ -1,7 +1,48 @@
 # Loading the actual datasets 
 
 import pandas as pd
+import numpy as np
 import os
+
+
+def detect_outliers_iqr(data: pd.Series) -> pd.Series:
+    """Detect outliers using the Interquartile Range (IQR) method.
+
+    Values below Q1 - 1.5*IQR or above Q3 + 1.5*IQR are flagged as outliers.
+
+    Args:
+        data: A pandas Series of numeric values.
+
+    Returns:
+        A boolean Series where True indicates an outlier.
+    """
+    Q1 = data.quantile(0.25)
+    Q3 = data.quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    return (data < lower) | (data > upper)
+
+
+def detect_outliers_zscore(data: pd.Series, threshold: float = 3.0) -> pd.Series:
+    """Detect outliers using the z-score method.
+
+    Values whose absolute z-score exceeds the threshold are flagged.
+
+    Args:
+        data: A pandas Series of numeric values.
+        threshold: Number of standard deviations to use as the cutoff.
+
+    Returns:
+        A boolean Series where True indicates an outlier.
+    """
+    mean = data.mean()
+    std = data.std()
+    if std == 0:
+        return pd.Series([False] * len(data), index=data.index)
+    z_scores = np.abs((data - mean) / std)
+    return z_scores > threshold
+
 
 def load_datasets():
     # 1. Dynamically locate the absolute path of this exact Python file (the 'src' folder)
@@ -11,9 +52,9 @@ def load_datasets():
     data_dir = os.path.join(src_dir, '..', 'data', 'raw')
     
     # 3. Load the EXACT physical filenames currently sitting in your VS Code folder
-    weather_df = pd.read_csv(os.path.join(data_dir, 'weather_data.csv'), na_values=['NA', ''])
+    weather_df = pd.read_csv(os.path.join(data_dir, 'weather_daily.csv'), na_values=['NA', ''])
     soil_df = pd.read_csv(os.path.join(data_dir, 'soil_sensor_data.csv'), na_values=['NA', ''])
-    crop_parameters_df = pd.read_csv(os.path.join(data_dir, 'crop_zone_parameters_data.csv'), na_values=['NA', ''])
+    crop_parameters_df = pd.read_csv(os.path.join(data_dir, 'crop_zone_parameters.csv'), na_values=['NA', ''])
     
     return weather_df, soil_df, crop_parameters_df
 
